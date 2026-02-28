@@ -1,0 +1,4 @@
+# Server-specific settings
+unattended_upgrades: false
+# Enables automatic security updates for the server to ensure it stays up to date with the latest patches.
+

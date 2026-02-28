@@ -1,16 +1,26 @@
-# 1. Determine the distribution name per host (already done by gather_facts: true)
+---
+- name: Base | Set timezone
+  ansible.builtin.timezone:
+    name: Europe/Amsterdam
 
-# 2. Check LOCALLY (on the Ansible controller) whether a tasks file exists for the detected distribution.
-- name: "{{ role_name }} | Check if tasks/{{ ansible_distribution }}.yml exists locally"
-  ansible.builtin.stat:
-    path: "{{ role_path }}/tasks/{{ ansible_distribution }}.yml"
-  delegate_to: localhost
-  become: false
-  vars:
-    ansible_distribution: "{{ hostvars[inventory_hostname].ansible_distribution }}"
-  register: distribution_config
+- name: Base | Install common packages
+  ansible.builtin.package:
+    name:
+      - curl
+      - vim
+      - git
+      - htop
+      - ca-certificates
+    state: present
 
-# 3. Include the distribution-specific task file only if it exists
-- name: "{{ role_name }} | Include distro-specific tasks"
-  ansible.builtin.include_tasks: "{{ ansible_distribution }}.yml"
-  when: distribution_config.stat.exists
+- name: Base | Ensure SSH service is running
+  ansible.builtin.service:
+    name: ssh
+    enabled: true
+    state: started
+
+- name: Base | Ensure correct permissions on /tmp
+  ansible.builtin.file:
+    path: /tmp
+    state: directory
+    mode: "1777"

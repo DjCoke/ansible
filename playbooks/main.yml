@@ -1,0 +1,9 @@
+---
+- name: Maintain Proxmox VE nodes
+  hosts: pve
+  gather_facts: true
+  become: true
+
+  roles:
+    - base
+    - pve

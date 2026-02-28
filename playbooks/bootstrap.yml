@@ -1,0 +1,46 @@
+---
+- name: Bootstrap new server for Ansible management
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    bootstrap_user: ashborn
+    bootstrap_groups:
+      - sudo
+    bootstrap_shell: /bin/bash
+    bootstrap_ssh_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEXGrUwai6ZD75n5rPTl06f0gEMtzJU0W8xFnR9YPghE"
+
+  tasks:
+    - name: Ensure sudo is installed
+      ansible.builtin.package:
+        name: sudo
+        state: present
+
+    - name: Ensure sudo group exists
+      ansible.builtin.group:
+        name: sudo
+        state: present
+
+    - name: Create bootstrap user
+      ansible.builtin.user:
+        name: "{{ bootstrap_user }}"
+        groups: "{{ bootstrap_groups }}"
+        append: true
+        shell: "{{ bootstrap_shell }}"
+        create_home: true
+        state: present
+
+    - name: Add SSH public key for bootstrap user
+      ansible.builtin.authorized_key:
+        user: "{{ bootstrap_user }}"
+        key: "{{ bootstrap_ssh_key }}"
+        state: present
+
+    - name: Configure passwordless sudo for bootstrap user
+      ansible.builtin.copy:
+        dest: "/etc/sudoers.d/{{ bootstrap_user }}"
+        content: "{{ bootstrap_user }} ALL=(ALL) NOPASSWD:ALL"
+        owner: root
+        group: root
+        mode: "0440"

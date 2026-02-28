@@ -1,0 +1,68 @@
+- name: Disable proxmox subscription popup
+  tags:
+    - proxmox
+    - subscription
+  ansible.builtin.replace:
+    path: /usr/share/javascript/proxmox-widget-toolkit/proxmoxlib.js
+    regexp: '^(.*)Ext\.Msg\.show\(\{(.*)$\n^(.*)No valid subscription(.*)$'
+    replace: '\1void({\2\n\3No valid subscription\4'
+
+- name: Add quit intel_iommu=on iommu=pt to kernel cmdline
+  tags: proxmox,iommu
+  lineinfile:
+    path: /etc/kernel/cmdline
+    backrefs: true
+    regexp: "^(((?!quiet intel_iommu=on iommu=pt).)*)$"
+    line: '\1 quiet intel_iommu=on iommu=pt'
+    state: present
+  notify: proxmox-boot-tool
+
+  # inspired from galexrt/ansible-kernel-modules
+- name: Add kernel modules to autoload file
+  tags: proxmox,iommu
+  lineinfile:
+    create: true
+    dest: "/etc/modules-load.d/load-ansible.conf"
+    line: "{{ item }}"
+    state: present
+    owner: root
+    group: root
+    mode: 0644
+  with_items:
+    - vfio
+    - vfio_iommu_type1
+    - vfio_pci
+  notify:
+    - restart systemd-modules-load
+
+- name: Configure ZFS on Proxmox server|Check if ZFS is installed
+  tags:
+    - zfs
+  ansible.builtin.command:
+    cmd: /sbin/zfs version
+  register: zfs_installed
+  changed_when: false
+  failed_when: zfs_installed.rc != 0
+
+- name: Check current atime setting
+  tags:
+    - zfs
+  ansible.builtin.command:
+    cmd: /sbin/zfs get -H -o value atime rpool
+  register: zfs_atime
+  changed_when: false
+
+- name: Debug current atime value
+  tags:
+    - zfs
+    - debug
+  ansible.builtin.debug:
+    msg: "Current atime value is {{ zfs_atime.stdout.strip() }}"
+
+- name: Disable atime for rpool if not already disabled
+  tags:
+    - zfs
+  ansible.builtin.command:
+    cmd: /sbin/zfs set atime=off rpool
+  when: zfs_atime.stdout.strip() != 'off'
+  changed_when: true

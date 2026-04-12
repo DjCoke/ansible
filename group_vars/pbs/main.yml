@@ -1,0 +1,12 @@
+# PBS-specific settings
+
+unattended_upgrades: false
+
+pbs_packages:
+  - qemu-guest-agent
+
+permitrootlogin: "no"
+
+# Grafana Alloy — o11y endpoints (LoadBalancer IPs in cartenon cluster)
+loki_lb_ip: "192.168.10.202"
+prometheus_lb_ip: "192.168.10.203"

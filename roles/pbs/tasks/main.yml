@@ -1,0 +1,19 @@
+---
+- name: Install required packages
+  ansible.builtin.package:
+    name: "{{ pbs_packages }}"
+    state: present
+  when: pbs_packages is defined
+
+- name: Disable unattended-upgrades
+  ansible.builtin.package:
+    name: unattended-upgrades
+    state: absent
+
+- name: Ensure qemu-guest-agent is running
+  ansible.builtin.service:
+    name: qemu-guest-agent
+    state: started
+    enabled: true
+
+- import_tasks: alloy.yml

@@ -5,6 +5,7 @@
   loop:
     - /etc/apt/sources.list.d/pve-enterprise.sources
     - /etc/apt/sources.list.d/ceph.sources
+    - /etc/apt/sources.list.d/proxmox.sources
 
 - name: Add no-subscription repo
   ansible.builtin.copy:

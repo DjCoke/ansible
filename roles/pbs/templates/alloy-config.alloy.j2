@@ -1,0 +1,61 @@
+// Grafana Alloy — Proxmox Backup Server agent
+// Collects journald logs and node metrics, pushes to the homelab o11y stack.
+
+logging {
+  level  = "warn"
+  format = "json"
+}
+
+// ── Journald logs → Loki ────────────────────────────────────────────────────
+
+loki.source.journal "system" {
+  forward_to    = [loki.write.loki.receiver]
+  relabel_rules = loki.relabel.journal.rules
+  labels = {
+    job  = "journal",
+    host = "{{ inventory_hostname }}",
+  }
+}
+
+loki.relabel "journal" {
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    target_label  = "unit"
+  }
+  rule {
+    source_labels = ["__journal_priority_keyword"]
+    target_label  = "level"
+  }
+  forward_to = []
+}
+
+loki.write "loki" {
+  endpoint {
+    url = "http://{{ loki_lb_ip }}:3100/loki/api/v1/push"
+  }
+}
+
+// ── Node metrics → Prometheus ───────────────────────────────────────────────
+
+prometheus.exporter.unix "node" {
+  set_collectors = [
+    "cpu", "diskstats", "filesystem", "loadavg",
+    "meminfo", "netdev", "uname", "time", "systemd",
+  ]
+}
+
+prometheus.scrape "node" {
+  targets         = prometheus.exporter.unix.node.targets
+  forward_to      = [prometheus.remote_write.prometheus.receiver]
+  scrape_interval = "30s"
+}
+
+prometheus.remote_write "prometheus" {
+  endpoint {
+    url = "http://{{ prometheus_lb_ip }}:9090/api/v1/write"
+  }
+  external_labels = {
+    host = "{{ inventory_hostname }}",
+    job  = "node",
+  }
+}

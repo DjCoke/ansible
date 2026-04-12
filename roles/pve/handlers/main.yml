@@ -1,12 +1,27 @@
 ---
-- name: proxmox-boot-tool
-  tags: proxmox,boot-tool
-  command: proxmox-boot-tool refresh
+- name: Reload networking
+  ansible.builtin.command: ifreload -a
 
-# handlers file for ansible-kernel-modules
-# galexrt/ansible-kernel-modules
-- name: restart systemd-modules-load
-  service:
-    name: systemd-modules-load
-    enabled: yes
+- name: Restart pveproxy
+  ansible.builtin.systemd:
+    name: pveproxy
+    state: restarted
+
+- name: Update GRUB
+  ansible.builtin.command: update-grub
+
+- name: Reload udev rules
+  ansible.builtin.command: udevadm control --reload-rules
+
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Update apt cache
+  ansible.builtin.apt:
+    update_cache: true
+
+- name: Restart alloy
+  ansible.builtin.systemd:
+    name: alloy
     state: restarted

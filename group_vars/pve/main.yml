@@ -1,10 +1,16 @@
+# Thunderbolt IRQ affinity — P-cores on i9-13900H
+pve_tb_pcores: "0-11"
+
 # platform-specific
 proxmox_instance: false
 proxmox_vm: false
 
 # Proxmox-specific packages
-proxmox_extra_packages:
+pve_packages:
   - pve-headers
+  - smartmontools
+  - nvme-cli
+  - bolt
 
 # SSHD settings for proxmox
 # We have to open root login for cluster to be able to work
@@ -12,3 +18,7 @@ permitrootlogin: "yes"
 ssh_users: "root erwin"
 
 unattended_upgrades: false
+
+# Grafana Alloy — o11y endpoints (LoadBalancer IPs in cartenon cluster)
+loki_lb_ip: "192.168.10.202"
+prometheus_lb_ip: "192.168.10.203"

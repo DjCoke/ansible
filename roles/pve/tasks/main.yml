@@ -1,68 +1,187 @@
-- name: Disable proxmox subscription popup
-  tags:
-    - proxmox
-    - subscription
-  ansible.builtin.replace:
-    path: /usr/share/javascript/proxmox-widget-toolkit/proxmoxlib.js
-    regexp: '^(.*)Ext\.Msg\.show\(\{(.*)$\n^(.*)No valid subscription(.*)$'
-    replace: '\1void({\2\n\3No valid subscription\4'
+- name: Remove enterprise repos
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/apt/sources.list.d/pve-enterprise.sources
+    - /etc/apt/sources.list.d/ceph.sources
 
-- name: Add quit intel_iommu=on iommu=pt to kernel cmdline
-  tags: proxmox,iommu
-  lineinfile:
-    path: /etc/kernel/cmdline
-    backrefs: true
-    regexp: "^(((?!quiet intel_iommu=on iommu=pt).)*)$"
-    line: '\1 quiet intel_iommu=on iommu=pt'
-    state: present
-  notify: proxmox-boot-tool
-
-  # inspired from galexrt/ansible-kernel-modules
-- name: Add kernel modules to autoload file
-  tags: proxmox,iommu
-  lineinfile:
-    create: true
-    dest: "/etc/modules-load.d/load-ansible.conf"
-    line: "{{ item }}"
-    state: present
+- name: Add no-subscription repo
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/pve-no-subscription.sources
+    content: |
+      Types: deb
+      URIs: http://download.proxmox.com/debian/pve
+      Suites: {{ ansible_facts['distribution_release'] }}
+      Components: pve-no-subscription
+      Signed-By: /usr/share/keyrings/proxmox-release-{{ ansible_facts['distribution_release'] }}.gpg
     owner: root
     group: root
-    mode: 0644
-  with_items:
-    - vfio
-    - vfio_iommu_type1
-    - vfio_pci
-  notify:
-    - restart systemd-modules-load
+    mode: "0644"
 
-- name: Configure ZFS on Proxmox server|Check if ZFS is installed
-  tags:
-    - zfs
-  ansible.builtin.command:
-    cmd: /sbin/zfs version
-  register: zfs_installed
-  changed_when: false
-  failed_when: zfs_installed.rc != 0
+- name: Update apt cache
+  ansible.builtin.apt:
+    update_cache: true
 
-- name: Check current atime setting
-  tags:
-    - zfs
-  ansible.builtin.command:
-    cmd: /sbin/zfs get -H -o value atime rpool
-  register: zfs_atime
-  changed_when: false
+- name: Remove subscription nag
+  ansible.builtin.replace:
+    path: /usr/share/javascript/proxmox-widget-toolkit/proxmoxlib.js
+    regexp: "res\\.data\\.status\\.toLowerCase\\(\\) !== 'active'"
+    replace: "false"
+  notify: Restart pveproxy
 
-- name: Debug current atime value
-  tags:
-    - zfs
-    - debug
-  ansible.builtin.debug:
-    msg: "Current atime value is {{ zfs_atime.stdout.strip() }}"
+- name: Install nag fix script
+  ansible.builtin.copy:
+    dest: /usr/local/bin/proxmox-nag-fix
+    content: |
+      #!/bin/sh
+      sed -i "s/res\.data\.status\.toLowerCase() !== 'active'/false/g" /usr/share/javascript/proxmox-widget-toolkit/proxmoxlib.js
+      systemctl restart pveproxy || true
+    owner: root
+    group: root
+    mode: "0755"
 
-- name: Disable atime for rpool if not already disabled
-  tags:
-    - zfs
-  ansible.builtin.command:
-    cmd: /sbin/zfs set atime=off rpool
-  when: zfs_atime.stdout.strip() != 'off'
+- name: Install APT hook to re-apply nag fix after upgrades
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/99-proxmox-nag-fix
+    content: |
+      DPkg::Post-Invoke:: "/usr/local/bin/proxmox-nag-fix";
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install PVE-specific packages
+  ansible.builtin.package:
+    name: "{{ pve_packages | default([]) }}"
+    state: present
+
+- name: Ensure unattended-upgrades package is absent
+  ansible.builtin.package:
+    name: unattended-upgrades
+    state: absent
+
+- name: Disable APT periodic unattended upgrades
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    content: |
+      APT::Periodic::Update-Package-Lists "0";
+      APT::Periodic::Unattended-Upgrade "0";
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Enable IPv4 forwarding
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_forward
+    value: "1"
+    sysctl_file: /etc/sysctl.d/99-pve-forwarding.conf
+    reload: true
+
+- name: Set extra kernel args in GRUB
+  ansible.builtin.lineinfile:
+    path: /etc/default/grub
+    regexp: '^GRUB_CMDLINE_LINUX_DEFAULT='
+    line: 'GRUB_CMDLINE_LINUX_DEFAULT="quiet {{ pve_extra_kernel_args | join(" ") }}"'
+  when: pve_extra_kernel_args | default([]) | length > 0
+  notify: Update GRUB
+
+- name: Load thunderbolt modules persistently
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/thunderbolt-net.conf
+    content: |
+      thunderbolt
+      thunderbolt_net
+    owner: root
+    group: root
+    mode: "0644"
+  when: pve_thunderbolt_interfaces is defined
+
+- name: Load thunderbolt modules now
+  community.general.modprobe:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - thunderbolt
+    - thunderbolt_net
+  when: pve_thunderbolt_interfaces is defined
+
+- name: Remove old thunderbolt udev rule file
+  ansible.builtin.file:
+    path: /etc/udev/rules.d/70-thunderbolt-net.rules
+    state: absent
+  when: pve_thunderbolt_interfaces is defined
+
+- name: Deploy Thunderbolt interface renaming udev rules
+  ansible.builtin.template:
+    src: thunderbolt-net.rules.j2
+    dest: /etc/udev/rules.d/85-thunderbolt-net.rules
+    owner: root
+    group: root
+    mode: "0644"
+  when: pve_thunderbolt_interfaces is defined
+  notify: Reload udev rules
+
+- name: Deploy Thunderbolt IRQ affinity script
+  ansible.builtin.template:
+    src: thunderbolt-affinity.j2
+    dest: /etc/network/if-up.d/thunderbolt-affinity
+    owner: root
+    group: root
+    mode: "0755"
+  when: pve_thunderbolt_interfaces is defined
+
+- name: Deploy Thunderbolt ifup retry script
+  ansible.builtin.template:
+    src: thunderbolt-ifup.sh.j2
+    dest: /usr/local/bin/pve-tb-ifup.sh
+    owner: root
+    group: root
+    mode: "0755"
+  when: pve_thunderbolt_interfaces is defined
+
+- name: Rebuild initramfs with updated module/link config
+  ansible.builtin.command: update-initramfs -u -k all
+  when: pve_thunderbolt_interfaces is defined
   changed_when: true
+
+- name: Create ceph-osd systemd override directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/ceph-osd@.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: pve_thunderbolt_interfaces is defined
+
+- name: Deploy ceph-osd systemd restart override
+  ansible.builtin.template:
+    src: ceph-osd-restart.conf.j2
+    dest: /etc/systemd/system/ceph-osd@.service.d/restart.conf
+    owner: root
+    group: root
+    mode: "0644"
+  when: pve_thunderbolt_interfaces is defined
+  notify: Reload systemd
+
+- name: Create ceph-mon systemd override directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/ceph-mon@.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: ceph_monitor | default(false)
+
+- name: Deploy ceph-mon systemd network dependency override
+  ansible.builtin.template:
+    src: ceph-mon-network-wait.conf.j2
+    dest: /etc/systemd/system/ceph-mon@.service.d/wait-for-network.conf
+    owner: root
+    group: root
+    mode: "0644"
+  when: ceph_monitor | default(false)
+  notify: Reload systemd
+
+- import_tasks: storage.yml
+- import_tasks: network.yml
+- import_tasks: alloy.yml
